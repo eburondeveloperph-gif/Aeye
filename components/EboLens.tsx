@@ -1,6 +1,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Type } from "@google/genai";
+import { Smartphone } from 'lucide-react';
 
 // Audio Processing Helpers
 function encode(bytes: Uint8Array) {
@@ -75,11 +76,14 @@ export const EboLens: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const videoChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
+    let isActive = true;
+
     const init = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ 
           audio: true, video: { facingMode: 'environment', width: 1280, height: 720 } 
         });
+        if (!isActive) return;
         streamRef.current = stream;
         if (hiddenVideoRef.current) hiddenVideoRef.current.srcObject = stream;
 
@@ -87,7 +91,7 @@ export const EboLens: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         inputCtxRef.current = new AudioContext({ sampleRate: 16000 });
         outputCtxRef.current = new AudioContext({ sampleRate: 24000 });
 
-        const session = await ai.live.connect({
+        const sessionPromise = ai.live.connect({
           model: 'gemini-2.5-flash-native-audio-preview-12-2025',
           config: {
             responseModalities: [Modality.AUDIO],
@@ -97,20 +101,24 @@ export const EboLens: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           },
           callbacks: {
             onopen: () => {
+              if (!isActive) return;
               setStatus("ACTIVE");
               const source = inputCtxRef.current!.createMediaStreamSource(stream);
               const processor = inputCtxRef.current!.createScriptProcessor(4096, 1, 1);
               processor.onaudioprocess = (e) => {
+                if (!isActive) return;
                 const data = e.inputBuffer.getChannelData(0);
                 let sum = 0;
                 for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-                setVolume(Math.sqrt(sum / data.length) * 100);
-                session.sendRealtimeInput({ media: createBlob(data) });
+                const rms = Math.sqrt(sum / data.length);
+                setVolume(rms * 200); 
+                sessionPromise.then(s => s.sendRealtimeInput({ media: createBlob(data) }));
               };
               source.connect(processor);
               processor.connect(inputCtxRef.current!.destination);
             },
-            onmessage: async (msg) => {
+            onmessage: async (msg: LiveServerMessage) => {
+              if (!isActive) return;
               const audio = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
               if (audio && outputCtxRef.current) {
                 setIsAiSpeaking(true);
@@ -134,22 +142,31 @@ export const EboLens: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                       canvas.width = 1280; canvas.height = 720;
                       canvas.getContext('2d')?.drawImage(hiddenVideoRef.current, 0, 0);
                       const base64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
-                      session.sendRealtimeInput({ media: { data: base64, mimeType: 'image/jpeg' } });
+                      sessionPromise.then(s => s.sendRealtimeInput({ media: { data: base64, mimeType: 'image/jpeg' } }));
                     }
                     setTimeout(() => setIsCapturing(false), 2000);
                   }
-                  if (fc.name === "record_video_clip") startRec(fc.args?.duration || 10);
+                  if (fc.name === "record_video_clip") startRec((fc.args as any)?.duration || 10);
                   responses.push({ id: fc.id, name: fc.name, response: { ok: true } });
                 }
-                session.sendToolResponse({ functionResponses: responses });
+                sessionPromise.then(s => s.sendToolResponse({ functionResponses: responses }));
               }
-            }
+            },
+            onclose: () => { if (isActive) setStatus("LINK_CLOSED"); },
+            onerror: () => { if (isActive) setStatus("LINK_LOST"); }
           }
         });
-      } catch { setStatus("LINK_LOST"); }
+      } catch (err) {
+        if (isActive) setStatus("HW_ERROR");
+      }
     };
     init();
-    return () => streamRef.current?.getTracks().forEach(t => t.stop());
+    return () => {
+      isActive = false;
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      inputCtxRef.current?.close();
+      outputCtxRef.current?.close();
+    };
   }, []);
 
   const startRec = (sec: number) => {
@@ -167,63 +184,56 @@ export const EboLens: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       setIsRecording(false);
     };
     recorder.start();
-    setTimeout(() => recorder.state === 'recording' && recorder.stop(), sec * 1000);
+    setTimeout(() => {
+      if (recorder.state === 'recording') recorder.stop();
+    }, sec * 1000);
   };
 
   const EyeHUD = () => (
-    <div className="flex-1 h-full relative p-8 flex flex-col justify-between overflow-hidden">
-      {/* HUD Top Outer Corner - Vital Stats */}
-      <div className="flex justify-between items-start">
-        <div className="flex flex-col gap-1 opacity-20">
-          <div className="flex items-center gap-1.5 text-[7px] tracking-[0.4em] font-mono-tech text-cyan-500 uppercase">
-            <div className={`w-1 h-1 rounded-full ${status === 'ACTIVE' ? 'bg-cyan-400 shadow-[0_0_4px_cyan]' : 'bg-red-500'}`} />
+    <div className="flex-1 h-full relative p-10 flex flex-col justify-between overflow-hidden">
+      <div 
+        className="absolute inset-0 pointer-events-none transition-all duration-150"
+        style={{
+          background: `radial-gradient(circle, transparent 65%, rgba(6, 182, 212, ${Math.min(0.06, volume / 1200)}))`,
+          boxShadow: `inset 0 0 ${volume / 2}px rgba(6, 182, 212, ${Math.min(0.1, volume / 800)})`
+        }}
+      />
+      <div className="flex justify-between items-start z-10">
+        <div className="flex flex-col gap-1 opacity-10">
+          <div className="flex items-center gap-1.5 text-[6px] tracking-[0.4em] font-mono-tech text-cyan-500 uppercase">
+            <div className={`w-1 h-1 rounded-full ${status === 'ACTIVE' ? 'bg-cyan-400' : 'bg-red-500'}`} />
             {status}
           </div>
-          <div className="text-[6px] text-cyan-400/50">CORTEX_LINK_v2.5</div>
         </div>
-        
         {isRecording && (
-          <div className="flex items-center gap-1 text-[8px] font-mono-tech text-red-500/60 animate-pulse font-bold tracking-[0.2em]">
-            <div className="w-1.5 h-1.5 bg-red-600 rounded-full shadow-[0_0_6px_red]" /> REC
+          <div className="flex items-center gap-1 text-[7px] font-mono-tech text-red-500/40 animate-pulse font-bold tracking-[0.2em]">
+            <div className="w-1 h-1 bg-red-600 rounded-full" /> REC
           </div>
         )}
       </div>
-
-      {/* Center Aura (Minimalist Focal Point - User stays focused on center) */}
-      <div className="flex-1 flex items-center justify-center pointer-events-none">
+      <div className="flex-1 flex items-center justify-center pointer-events-none z-10">
         <div 
           className={`transition-all duration-700 rounded-full
-            ${isAiSpeaking ? 'w-1 h-1 bg-white/40 blur-[1px] shadow-[0_0_8px_white]' : 
-              isCapturing ? 'w-2 h-2 bg-red-500/30 blur-[2px] shadow-[0_0_12px_red]' : 
-              'w-0.5 h-0.5 bg-cyan-500/10'}`}
-          style={{ transform: `scale(${1 + (volume / 100)})` }}
+            ${isAiSpeaking ? 'w-1 h-1 bg-white/20 blur-[1px]' : 
+              isCapturing ? 'w-2 h-2 bg-red-500/10 blur-[2px]' : 
+              'w-0.5 h-0.5 bg-cyan-500/5'}`}
+          style={{ transform: `scale(${1 + (volume / 150)})` }}
         />
-        
-        {isCapturing && (
-          <div className="absolute inset-0 flex items-center justify-center">
-             <div className="w-full h-[0.5px] bg-cyan-500/5 shadow-[0_0_15px_cyan] opacity-20 animate-[sweep_2.5s_ease-in-out_infinite]" />
-          </div>
-        )}
       </div>
-
-      {/* Bottom HUD Layer - Peripheral Monitoring */}
-      <div className="flex items-end justify-between w-full opacity-30">
+      <div className="flex items-end justify-between w-full opacity-10 z-10">
         <div className="flex flex-col gap-1">
-          <div className="flex gap-0.5 h-1.5 items-end">
-            {[...Array(5)].map((_, i) => (
+          <div className="flex gap-0.5 h-1 items-end">
+            {[...Array(4)].map((_, i) => (
               <div 
                 key={i} 
-                className="w-[1px] bg-cyan-400/40 transition-all duration-100"
-                style={{ height: `${(isAiSpeaking || volume > 1 ? Math.random() * 100 : 20)}%` }}
+                className="w-[1px] bg-cyan-400/20"
+                style={{ height: `${(isAiSpeaking || volume > 2 ? Math.random() * 80 + 20 : 10)}%` }}
               />
             ))}
           </div>
-          <div className="text-[5px] text-cyan-500/40 tracking-[0.5em] uppercase">Audio_In</div>
+          <div className="text-[4px] text-cyan-500/20 tracking-[0.6em] uppercase">LINK_STABLE</div>
         </div>
-
-        <div className="text-[5px] text-white/10 uppercase tracking-[0.4em]">
-          Ebo_Vision_Platform
-        </div>
+        <div className="text-[4px] text-white/5 uppercase tracking-[0.4em]">EYEGLASSES_VIEW_IFACE</div>
       </div>
     </div>
   );
@@ -232,30 +242,23 @@ export const EboLens: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     <div className="fixed inset-0 bg-black flex font-mono-tech select-none overflow-hidden cursor-none">
       <video ref={hiddenVideoRef} autoPlay playsInline muted className="hidden" />
       <canvas ref={canvasRef} className="hidden" />
-
-      {/* 
-        STEREOSCOPIC MIRRORED HUD
-        - side-by-side (SBS) for stereoscopic lenses.
-        - scale-x-[-1] mirrors the entire UI for reflection-off-glass projection.
-        - Peripheral placement ensures central vision is unobstructed.
-      */}
       <div className="flex w-full h-full transform scale-x-[-1]">
-        <EyeHUD /> {/* Project to Left Eye */}
-        <EyeHUD /> {/* Project to Right Eye */}
+        <EyeHUD />
+        <EyeHUD />
       </div>
-
-      {/* Transparent overlay for the shutdown click if needed (emergency only) */}
-      <div className="absolute top-0 right-0 w-24 h-24 z-[100] cursor-pointer opacity-0" onClick={onClose} />
-
+      <div 
+        className="absolute bottom-6 right-6 z-[100] cursor-pointer opacity-[0.05] hover:opacity-30 transition-opacity pointer-events-auto" 
+        onClick={onClose}
+      >
+        <Smartphone className="text-white" size={24} />
+      </div>
       <style>{`
         @keyframes sweep {
-          0% { transform: translateY(-40vh); opacity: 0; }
-          50% { opacity: 0.15; }
-          100% { transform: translateY(40vh); opacity: 0; }
+          0% { transform: translateY(-30vh); opacity: 0; }
+          50% { opacity: 0.1; }
+          100% { transform: translateY(30vh); opacity: 0; }
         }
-        
-        /* Hide mouse cursor to maintain immersion */
-        body { cursor: none; }
+        body { cursor: none; background: black; }
       `}</style>
     </div>
   );

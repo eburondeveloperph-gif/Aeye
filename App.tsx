@@ -1,10 +1,12 @@
 
 import React, { useState } from 'react';
 import { EboLens } from './components/EboLens';
-import { Zap } from 'lucide-react';
+import { PhoneDashboard } from './components/PhoneDashboard';
+import { Zap, Smartphone, Glasses } from 'lucide-react';
 
 const App: React.FC = () => {
   const [isActive, setIsActive] = useState(false);
+  const [viewMode, setViewMode] = useState<'PHONE' | 'GLASSES'>('PHONE');
 
   if (!isActive) {
     return (
@@ -15,20 +17,28 @@ const App: React.FC = () => {
            </div>
         </div>
         <h1 className="text-2xl text-cyan-500 tracking-[0.3em] mb-4">EBO A-EYE</h1>
-        <p className="text-gray-500 text-xs max-w-xs mb-12 uppercase leading-loose">
-          Next-generation vision OS. Voice-first orchestration.
+        <p className="text-gray-500 text-[10px] max-w-xs mb-12 uppercase tracking-widest leading-loose">
+          Next-generation vision OS.<br/>Neural orchestration system.
         </p>
         <button 
           onClick={() => setIsActive(true)}
-          className="px-8 py-3 bg-cyan-900/30 border border-cyan-500/50 text-cyan-400 hover:bg-cyan-500/20 transition-all tracking-widest text-sm"
+          className="px-8 py-3 bg-cyan-900/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 transition-all tracking-[0.4em] text-xs uppercase"
         >
-          INITIATE SYSTEM
+          Initiate Core
         </button>
       </div>
     );
   }
 
-  return <EboLens onClose={() => setIsActive(false)} />;
+  return (
+    <div className="h-screen w-screen bg-black overflow-hidden relative">
+      {viewMode === 'PHONE' ? (
+        <PhoneDashboard onSwitchToGlasses={() => setViewMode('GLASSES')} onShutdown={() => setIsActive(false)} />
+      ) : (
+        <EboLens onClose={() => setViewMode('PHONE')} />
+      )}
+    </div>
+  );
 };
 
 export default App;
