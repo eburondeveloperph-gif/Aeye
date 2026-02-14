@@ -1,0 +1,9 @@
+{
+  "name": "Ebo A-eye",
+  "description": "Minimalist voice-driven AR OS powered by Gemini Live Audio.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
